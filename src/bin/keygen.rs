@@ -129,6 +129,27 @@ fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
+/// 秒数说成人话（`1 天 3 小时` / `23 小时 59 分` / `5 分`）。
+///
+/// ★ 必须和 lib 侧 `license.rs` 的 `format_duration()` 保持一致 ——
+///   两处是独立实现（bin 链接不到 cdylib），改一边记得同步另一边。
+///
+/// ★ 为什么不能直接显示"整数天"：`86400/86400=1` 看着没问题，但客户
+///   签发完**几秒后**查询时剩余 86395 秒 → `86395/86400=0`，
+///   一张刚签发的 1 天卡会显示"还剩 0 天"，客户会以为卡是坏的。
+fn human_dur(secs: u64) -> String {
+    let d = secs / 86_400;
+    let h = (secs % 86_400) / 3600;
+    let m = (secs % 3600) / 60;
+    if d > 0 {
+        format!("{d} 天 {h} 小时")
+    } else if h > 0 {
+        format!("{h} 小时 {m} 分")
+    } else {
+        format!("{m} 分")
+    }
+}
+
 // ==================== 命令实现 ====================
 
 fn usage() {
@@ -281,9 +302,9 @@ fn cmd_verify(args: &[String]) {
     println!("绑定机器码：{}", mc_display(&mc));
     println!("到期时间：{}", format_ts(expires));
     if expires > now {
-        println!("状态：有效，还剩 {} 天", (expires - now) / 86_400);
+        println!("状态：有效，还剩 {}", human_dur(expires - now));
     } else {
-        println!("状态：**已过期** {} 天", (now - expires) / 86_400);
+        println!("状态：**已过期** {}", human_dur(now - expires));
     }
     println!("==============================================\n");
 }
@@ -366,9 +387,9 @@ fn cmd_issue(args: &[String]) {    // ---- 解析参数 ----
     println!("\n================ 卡密签发成功 ================");
     println!("绑定机器码：{}", mc_display(&mc));
     println!(
-        "有效期：{days} 天（到期 {}，还有 {} 天）",
+        "有效期：{days} 天（到期 {}，{}）",
         format_ts(expires),
-        (expires - now_unix()) / 86_400
+        human_dur(expires.saturating_sub(now_unix()))
     );
     println!("\n卡密（整段发给客户，让他粘贴进卡密窗口）：\n");
     println!("{pretty}");
@@ -436,5 +457,21 @@ mod tests {
         assert!(parse_machine_id("XYZ").is_none());
         assert!(parse_machine_id("A1B2C3").is_none(), "少一位应当拒绝");
         assert!(parse_machine_id("").is_none());
+    }
+
+    /// 剩余时长的显示必须精确到小时/分钟。
+    ///
+    /// ★ 这个测试钉的是一个**已经发生过的误导**：早期显示用的是整数天
+    ///   `(expires - now) / 86400`，一张刚签发的"1 天卡"立刻查询会得到
+    ///   `86395 / 86400 == 0`，界面上写着"还剩 0 天" —— 卡是好的，
+    ///   但客户看到这个数字会直接怀疑卡有问题。
+    #[test]
+    fn human_dur_is_precise() {
+        assert_eq!(human_dur(86_395), "23 小时 59 分", "不足一天必须显示小时，不能塌成 0 天");
+        assert_eq!(human_dur(86_400), "1 天 0 小时");
+        assert_eq!(human_dur(90_000), "1 天 1 小时");
+        assert_eq!(human_dur(3_600), "1 小时 0 分");
+        assert_eq!(human_dur(300), "5 分");
+        assert_eq!(human_dur(0), "0 分");
     }
 }

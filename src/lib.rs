@@ -160,10 +160,9 @@ fn draw_menu(ui: &Ui, config: &mut Config, lic: &mut license::License) {
             // 续期（旧卡过期换新卡）或换机器时，必须先在这里把旧记录清掉，
             // 否则程序会一直读那张过期卡，连激活窗口都不会弹。
             if let license::License::Valid { expires } = &*lic {
-                let days = license::remaining_days(*expires);
                 ui.text_colored(
                     [0.4, 1.0, 0.5, 1.0],
-                    &format!("授权有效 · 剩余 {days} 天"),
+                    &format!("授权有效 · {}", license::remaining_text(*expires)),
                 );
             }
             if ui.button("注销授权（换卡 / 续期用）") {
@@ -287,8 +286,8 @@ impl ImguiRenderLoop for EspLoop {
             self.license = license::load();
             match &self.license {
                 license::License::Valid { expires } => log::append(&format!(
-                    "[授权] 卡密有效，剩余 {} 天 | 机器码 {}",
-                    license::remaining_days(*expires),
+                    "[授权] 卡密有效，{} | 机器码 {}",
+                    license::remaining_text(*expires),
                     license::machine_id_display()
                 )),
                 license::License::Invalid(e) => {

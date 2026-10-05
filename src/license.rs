@@ -155,10 +155,21 @@ pub fn now_unix() -> u64 {
         .unwrap_or(0)
 }
 
-/// 距离到期还有多少天（负数 = 已过期）。用于在界面上显示剩余时间。
-pub fn remaining_days(expires: u64) -> i64 {
-    let now = now_unix() as i64;
-    (expires as i64 - now) / 86400
+/// 剩余时长的人类可读文本，例如 `还剩 23 小时 59 分` / `还剩 1 天 3 小时` / `已过期 2 小时`。
+///
+/// ★ 为什么不用"剩余天数"：整数天会把"还剩 23:59:59"显示成 **0 天** ——
+///   客户刚买完一张 1 天卡，一看界面写着"剩余 0 天"，转头就来找你售后。
+///   所以这里一律给精确时长，不足一天就把小时/分钟摆出来。
+///
+/// （早期确实有个 `remaining_days()` 返回整数天，就是这个毛病，已经删掉了 ——
+///   留着它迟早还会有人拿去直接显示。）
+pub fn remaining_text(expires: u64) -> String {
+    let now = now_unix();
+    if expires > now {
+        format!("还剩 {}", format_duration(expires - now))
+    } else {
+        format!("已过期 {}", format_duration(now - expires))
+    }
 }
 
 /// 时间回拨检测 + 更新锚点。
