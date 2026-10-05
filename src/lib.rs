@@ -73,7 +73,7 @@ impl EspLoop {
     }
 }
 
-fn draw_menu(ui: &Ui, config: &mut Config) {
+fn draw_menu(ui: &Ui, config: &mut Config, lic: &mut license::License) {
     if !config.menu_open {
         return;
     }
@@ -153,6 +153,25 @@ fn draw_menu(ui: &Ui, config: &mut Config) {
                 ui.same_line();
                 ui.checkbox("  方向反转", &mut config.lean_invert);
             }
+
+            ui.separator();
+            // ===== 授权信息 / 换卡 =====
+            // 卡密激活后会存到本地，之后每次启动自动读取、不再询问。
+            // 续期（旧卡过期换新卡）或换机器时，必须先在这里把旧记录清掉，
+            // 否则程序会一直读那张过期卡，连激活窗口都不会弹。
+            if let license::License::Valid { expires } = &*lic {
+                let days = license::remaining_days(*expires);
+                ui.text_colored(
+                    [0.4, 1.0, 0.5, 1.0],
+                    &format!("授权有效 · 剩余 {days} 天"),
+                );
+            }
+            if ui.button("注销授权（换卡 / 续期用）") {
+                license::clear();
+                *lic = license::License::Missing;
+            }
+            ui.same_line();
+            ui.text("注销后激活窗口会重新出现，重新粘贴新卡即可");
         });
 }
 
@@ -323,7 +342,7 @@ impl ImguiRenderLoop for EspLoop {
         data::USE_ROLE_SCAN.store(self.config.use_role_scan, Ordering::Relaxed);
 
         esp::draw(ui, &self.config, &snapshot);
-        draw_menu(ui, &mut self.config);
+        draw_menu(ui, &mut self.config, &mut self.license);
     }
 
     fn message_filter(&self, io: &Io) -> MessageFilter {

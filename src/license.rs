@@ -287,6 +287,17 @@ pub fn save(code: &str) -> bool {
     std::fs::write(LIC_PATH, code.trim()).is_ok()
 }
 
+/// 删除本地卡密 —— 注销授权 / 换卡 / 续期时用。
+///
+/// ★ 为什么需要它：卡密激活后会存进本地文件，之后每次启动自动读取、不再询问。
+///   但客户**续期**（旧卡过期，换了新卡）或者换机器时，必须有个地方能清掉旧记录，
+///   否则程序会一直读那张过期卡、连激活窗口都不弹。
+///
+/// 删除失败也返回 false，不 panic —— 文件本来就不存在是最常见的情况。
+pub fn clear() -> bool {
+    std::fs::remove_file(LIC_PATH).is_ok()
+}
+
 /// 读取本地卡密并验证。返回当前授权状态。
 pub fn load() -> License {
     let Ok(text) = std::fs::read_to_string(LIC_PATH) else {
