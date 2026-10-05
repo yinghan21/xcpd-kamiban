@@ -77,19 +77,19 @@ fn draw_menu(ui: &Ui, config: &mut Config, lic: &mut license::License) {
     if !config.menu_open {
         return;
     }
-    ui.window("CSGO ESP --dong")
-        .size([460.0, 420.0], Condition::FirstUseEver)
+    ui.window("香肠派对 --don")
+        .size([500.0, 430.0], Condition::FirstUseEver)
         .position([20.0, 20.0], Condition::FirstUseEver)
         .build(|| {
             // ===== 自瞄 =====
-            ui.checkbox("Enable auto-aim", &mut config.aim_enabled);
+            ui.checkbox("自瞄开关", &mut config.aim_enabled);
             if config.aim_enabled {
-                ui.slider("FOV", 20.0, 600.0, &mut config.aim_fov);
-                ui.slider("Smooth", 1.0, 10.0, &mut config.aim_smooth);
-                ui.slider("speed", 0.1, 3.0, &mut config.aim_speed);
-                ui.slider("瞄点上下移(米, 负=往下)", -1.5, 1.5, &mut config.aim_offset_y);
-                ui.slider("粘滞阈值(像素, 0=永远瞄准心最近的)", 0.0, 60.0, &mut config.aim_stick_px);
-                ui.slider("超前补偿(帧, 治自瞄落在移动敌人身后; 0=关)", 0.0, 8.0, &mut config.aim_screen_lead);
+                ui.slider("自瞄范围(像素)", 20.0, 600.0, &mut config.aim_fov);
+                ui.slider("平滑度(越大越稳)", 1.0, 10.0, &mut config.aim_smooth);
+                ui.slider("跟随速度", 0.1, 3.0, &mut config.aim_speed);
+                ui.slider("瞄点上下移(米, 负=下)", -1.5, 1.5, &mut config.aim_offset_y);
+                ui.slider("粘滞阈值(像素)", 0.0, 60.0, &mut config.aim_stick_px);
+                ui.slider("超前补偿(帧, 0=关)", 0.0, 8.0, &mut config.aim_screen_lead);
                 ui.slider("预判提前量(秒)", 0.0, 0.6, &mut config.aim_lead_time);
                 let mut head = config.aim_target == crate::config::SnapTarget::Head;
                 if ui.checkbox("瞄头(不勾=瞄脚)", &mut head) {
@@ -99,59 +99,59 @@ fn draw_menu(ui: &Ui, config: &mut Config, lic: &mut license::License) {
                         crate::config::SnapTarget::Feet
                     };
                 }
-                ui.checkbox("只瞄敌人(不瞄队友)", &mut config.aim_enemy_only);
+                ui.checkbox("只瞄敌人", &mut config.aim_enemy_only);
                 ui.same_line();
-                ui.checkbox("瞄人机(AI/bot)  ←人机模式必开", &mut config.aim_bots);
-                ui.checkbox("按键触发自瞄(不勾=一直瞄)", &mut config.aim_hold_mode);
+                ui.checkbox("瞄人机(AI)", &mut config.aim_bots);
+                ui.checkbox("按住才自瞄", &mut config.aim_hold_mode);
                 ui.same_line();
                 if ui.button(format!("按键: {}  ←点这里改", crate::aim::vk_name(config.aim_key))) {
                     crate::aim::begin_bind_key();
                 }
                 if crate::aim::binding() {
                     ui.same_line();
-                    ui.text("等待按键… (Esc 取消)");
+                    ui.text("按任意键…(Esc 取消)");
                 }
             }
 
             ui.separator();
             // ===== 透视 =====
-            ui.checkbox("Enable ESP", &mut config.esp_enabled);
+            ui.checkbox("透视开关", &mut config.esp_enabled);
             ui.same_line();
-            ui.checkbox("Enable BOX", &mut config.draw_box_enabled);
+            ui.checkbox("方框", &mut config.draw_box_enabled);
             ui.same_line();
-            ui.checkbox("Enable LINE", &mut config.draw_snapline);
+            ui.checkbox("射线", &mut config.draw_snapline);
             ui.same_line();
-            ui.checkbox("Enable HEALTH", &mut config.draw_health_bar);
+            ui.checkbox("血条", &mut config.draw_health_bar);
             ui.same_line();
-            ui.checkbox("绘制昵称", &mut config.draw_name);
+            ui.checkbox("昵称", &mut config.draw_name);
 
             ui.separator();
             // ===== 显示 =====
-            ui.checkbox("敌我区分(敌人红/队友青)", &mut config.team_check);
+            ui.checkbox("敌我区分(敌红友青)", &mut config.team_check);
             ui.same_line();
-            ui.checkbox("顶部显示 绘制/背敌 人数", &mut config.draw_counter);
+            ui.checkbox("显示人数", &mut config.draw_counter);
             ui.same_line();
-            ui.checkbox("骨架(棍人)", &mut config.draw_skeleton);
-            ui.checkbox("给自己画框(洋红SELF)", &mut config.draw_self_box);
+            ui.checkbox("骨架", &mut config.draw_skeleton);
+            ui.checkbox("给自己画框", &mut config.draw_self_box);
             ui.same_line();
-            ui.checkbox("隐藏离线/退出玩家(治“幽灵框”)", &mut config.hide_offline);
+            ui.checkbox("隐藏离线玩家", &mut config.hide_offline);
             ui.slider("框宽(米)", 0.3, 2.0, &mut config.box_width);
             ui.slider("框内边距(像素)", 0.0, 10.0, &mut config.box_pad);
 
             ui.separator();
             // ===== 头部 / 姿态（默认值就能用）=====
-            ui.slider("身高(读不到真实头时的回退值)", -30.0, 30.0, &mut config.player_height);
-            ui.slider("头顶微调(米, 盖住头顶)", -1.0, 1.0, &mut config.head_pad);
-            ui.checkbox("用真头(客户端链 headPoint)", &mut config.use_real_head);
+            ui.slider("身高回退值(米)", -30.0, 30.0, &mut config.player_height);
+            ui.slider("头顶微调(米)", -1.0, 1.0, &mut config.head_pad);
+            ui.checkbox("用真头(headPoint)", &mut config.use_real_head);
             ui.same_line();
-            ui.checkbox("蹲下/趴下时框跟着变矮", &mut config.crouch_follow);
-            ui.checkbox("位置平滑(治“框跟随一卡一卡”)", &mut config.pos_smooth);
+            ui.checkbox("蹲下时框变矮", &mut config.crouch_follow);
+            ui.checkbox("位置平滑", &mut config.pos_smooth);
             ui.same_line();
-            ui.checkbox("探头跟随(侧身时框/瞄点跟着探出头)", &mut config.lean_follow);
+            ui.checkbox("探头跟随", &mut config.lean_follow);
             if config.lean_follow {
-                ui.slider("  探头横向偏移(米)", 0.0, 1.0, &mut config.lean_shift_m);
+                ui.slider("探头偏移(米)", 0.0, 1.0, &mut config.lean_shift_m);
                 ui.same_line();
-                ui.checkbox("  方向反转", &mut config.lean_invert);
+                ui.checkbox("方向反转", &mut config.lean_invert);
             }
 
             ui.separator();
@@ -165,12 +165,12 @@ fn draw_menu(ui: &Ui, config: &mut Config, lic: &mut license::License) {
                     &format!("授权有效 · {}", license::remaining_text(*expires)),
                 );
             }
-            if ui.button("注销授权（换卡 / 续期用）") {
+            if ui.button("注销授权(换卡/续期)") {
                 license::clear();
                 *lic = license::License::Missing;
             }
             ui.same_line();
-            ui.text("注销后激活窗口会重新出现，重新粘贴新卡即可");
+            ui.text("注销后会重新弹出激活窗口");
         });
 }
 
@@ -480,7 +480,16 @@ fn load_chinese_font(ctx: &mut Context) {    const FONT_SIZE: f32 = 18.0;
             size_pixels: FONT_SIZE,
             config: Some(FontConfig {
                 size_pixels: FONT_SIZE,
-                glyph_ranges: FontGlyphRanges::chinese_simplified_common(),
+                // ★ 用 chinese_full() 而不是 chinese_simplified_common()。
+                //
+                //   common 版是 ImGui 内置的"2500 常用字"表，像「幽」「瞄」这种
+                //   偏一点的字**不在里面** —— 菜单里会直接显示成 `?`（实测
+                //   "幽灵框"变"？灵框"、"瞄点"变"?点"）。
+                //
+                //   full 版覆盖整个 CJK 基本区（约 2 万字），18px 下字体图集约
+                //   8MB 显存、构建多花一两秒（只在注入时一次），换来的是
+                //   **以后菜单里写任何中文都不会再缺字**。
+                glyph_ranges: FontGlyphRanges::chinese_full(),
                 oversample_h: 1,
                 pixel_snap_h: true,
                 ..Default::default()
@@ -517,7 +526,7 @@ fn run(hmodule: *mut c_void) ->anyhow::Result<()> {
         }
     };
 
-    log::reset("xcpd ESP 启动 【v127·卡密授权+剪贴板+注销】");
+    log::reset("xcpd ESP 启动 【v128·界面中文化+字体修复】");
 
     let unity_base = memory::UnityPlayer_module_base().ok_or_else(|| {
         log::stage("失败: GetModuleHandleA UnityPlayer.dll");
