@@ -9,6 +9,7 @@ mod data;
 mod esp;
 mod aim;
 mod log;
+mod license;
 
 use crate::config::{Config};
 use crate::data::Snapshot;
@@ -31,6 +32,23 @@ struct EspLoop {
     config: Config,
     snapshot: Arc<RwLock<Snapshot>>,
     prev_insert_down: bool,
+
+    // ===================== 卡密授权 =====================
+    /// 当前授权状态。未授权时渲染线程只画激活窗口，ESP / 自瞄全部不工作。
+    license: license::License,
+    /// 卡密输入框的缓冲
+    lic_input: String,
+    /// 给用户看的提示（错误原因）
+    lic_msg: String,
+    /// 是否已经尝试过读取本地卡密（只在第一帧读一次）
+    lic_checked: bool,
+
+    // ===================== 延迟启动数据线程 =====================
+    /// 两个模块基址先存着 —— 授权通过后才用它启动读内存线程。
+    unity_base: usize,
+    gameassembly_base: usize,
+    /// 读内存线程是否已启动（只启动一次）
+    data_started: bool,
 }
 
 impl EspLoop {
@@ -126,6 +144,60 @@ fn draw_menu(ui: &Ui, config: &mut Config) {
         });
 }
 
+/// 卡密激活窗口。
+///
+/// ★ 这是"未授权"状态下唯一会画出来的东西 —— ESP / 自瞄的代码在这之前就 return 了。
+///   客户第一次注入时会看到它：把机器码发给你换卡密，粘贴进来点验证即可。
+///   验证通过后卡密会存到本地，之后每次启动自动读取，不用重复输入。
+fn draw_license_window(ui: &Ui, st: &mut EspLoop) {
+    let [sw, sh] = ui.io().display_size;
+
+    // ★ 用 Condition::Always 而不是 FirstUseEver：这个窗口必须一直可见。
+    //   用 FirstUseEver 的话它会"记住位置"，客户拖到屏幕外就找不回来了。
+    ui.window("授权验证  ·  xcpd")
+        .size([560.0, 300.0], Condition::Always)
+        .position([sw * 0.5 - 280.0, sh * 0.5 - 150.0], Condition::Always)
+        .build(|| {
+            ui.text("本程序需要卡密授权");
+            ui.separator();
+
+            // ---- 机器码：客户要把这串发给你 ----
+            ui.text("本机机器码：");
+            ui.same_line();
+            ui.text_colored([0.4, 1.0, 0.5, 1.0], &license::machine_id_display());
+            ui.text("把上面这串发给我买卡 / 续期（卡密与它绑定，换机器要重新签）");
+
+            ui.separator();
+
+            // ---- 卡密输入 ----
+            ui.text("卡密：");
+            ui.input_text("##lic", &mut st.lic_input).build();
+            ui.text("（粘贴后点下面的按钮。格式形如 XXXXXXXX-XXXXXXXX-...）");
+
+            if ui.button("  验证并保存  ") {
+                match license::verify(&st.lic_input) {
+                    Ok(expires) => {
+                        license::save(&st.lic_input);
+                        st.license = license::License::Valid { expires };
+                        st.lic_msg = String::new();
+                    }
+                    Err(e) => st.lic_msg = e,
+                }
+            }
+
+            // ---- 提示（失败原因直接给客户看，他一看就知道该找你换什么）----
+            if !st.lic_msg.is_empty() {
+                ui.separator();
+                ui.text_colored([1.0, 0.4, 0.4, 1.0], &st.lic_msg);
+            }
+            // 从本地文件读出来的卡密如果无效（比如过期了），也把原因摆出来
+            if let license::License::Invalid(e) = &st.license {
+                ui.separator();
+                ui.text_colored([1.0, 0.4, 0.4, 1.0], e);
+            }
+        });
+}
+
 impl ImguiRenderLoop for EspLoop {
     fn initialize<'a>(&'a mut self, ctx: &mut Context, _rc: &'a mut dyn RenderContext) {
         // 必须在这里加字体：hudhook 紧接着才 build 字体图集，之后再加就晚了。
@@ -134,12 +206,18 @@ impl ImguiRenderLoop for EspLoop {
 
     fn before_render<'a>(&'a mut self, ctx: &mut Context, _rc: &'a mut dyn RenderContext) {
         let io = ctx.io_mut();
-        io.mouse_draw_cursor = self.config.menu_open;
+
+        // ★ 未授权时也必须显示鼠标光标并解除锁定 ——
+        //   否则客户没法在激活窗口里点「验证」按钮（游戏默认把光标锁在屏幕中心）。
+        let needs_cursor = self.config.menu_open
+            || !matches!(self.license, license::License::Valid { .. });
+        io.mouse_draw_cursor = needs_cursor;
+
         if let Some((w,h)) = memory::game_client_size() {
             io.display_size = [w,h];
         }
 
-        if self.config.menu_open {
+        if needs_cursor {
             let _ = unsafe{ ClipCursor(std::ptr::null()) };
         }
     }
@@ -148,6 +226,44 @@ impl ImguiRenderLoop for EspLoop {
         // 标记“这一帧游戏能正常渲染” → 允许 IL2CPP API 调用。
         // 加载/切场景时 Present 不会跑，时间戳变旧，读线程就会自动停手，不再闪退。
         memory::api_tick();
+
+        // ===================== 授权闸门 =====================
+        // 第一帧：尝试读取本地保存的卡密（客户激活过一次之后就不用再输了）
+        if !self.lic_checked {
+            self.lic_checked = true;
+            self.license = license::load();
+            match &self.license {
+                license::License::Valid { expires } => log::append(&format!(
+                    "[授权] 卡密有效，剩余 {} 天 | 机器码 {}",
+                    license::remaining_days(*expires),
+                    license::machine_id_display()
+                )),
+                license::License::Invalid(e) => {
+                    log::append(&format!("[授权] 本地卡密无效：{e}"))
+                }
+                license::License::Missing => log::append(&format!(
+                    "[授权] 未找到卡密，等待输入 | 本机机器码 {}",
+                    license::machine_id_display()
+                )),
+            }
+        }
+
+        // ★★ 未授权 → 只画激活窗口，然后直接返回。
+        //    这一行是整个授权系统的执行点：ESP、自瞄、菜单全都在它后面，
+        //    没通过就一行都执行不到。
+        if !matches!(self.license, license::License::Valid { .. }) {
+            draw_license_window(ui, self);
+            return;
+        }
+
+        // 授权通过 → 启动读内存线程（只启动一次）。
+        // ★ 放在这里而不是 run() 里：未授权的 DLL **连一个字节的游戏内存都不读**，
+        //   它只是个会画输入框的空壳，被逆向也拿不到任何游戏数据。
+        if !self.data_started {
+            self.data_started = true;
+            data::spawn(self.unity_base, self.gameassembly_base, Arc::clone(&self.snapshot));
+        }
+
         // 正在等用户按一个键 → 捕获它作为自瞄按键
         if let Some(vk) = aim::poll_bind_key() {
             self.config.aim_key = vk;
@@ -177,7 +293,11 @@ impl ImguiRenderLoop for EspLoop {
     }
 
     fn message_filter(&self, io: &Io) -> MessageFilter {
-        if !self.config.menu_open {
+        // ★ 未授权时也必须捕获鼠标/键盘 —— 激活窗口上的输入框和按钮需要它们，
+        //   否则客户连卡密都粘不进去。
+        let need_input = self.config.menu_open
+            || !matches!(self.license, license::License::Valid { .. });
+        if !need_input {
             return MessageFilter::empty();
         }
         let mut filter = MessageFilter::empty();
@@ -269,12 +389,21 @@ fn run(hmodule: *mut c_void) ->anyhow::Result<()> {
 
     log::stage("正常: 两个模块基址都拿到了");
     let snapshot = Arc::new(RwLock::new(Snapshot::default()));
-    data::spawn(unity_base, gameassembly_base, Arc::clone(&snapshot));
+
+    // ★ 这里**故意不调** data::spawn —— 读内存线程改由渲染线程在
+    //   "卡密验证通过"之后再启动。未授权的 DLL 因此完全不碰游戏数据。
 
     let render_loop = EspLoop {
         config: Config::default(),
         snapshot,
         prev_insert_down: false,
+        license: license::License::Missing,
+        lic_input: String::new(),
+        lic_msg: String::new(),
+        lic_checked: false,
+        unity_base,
+        gameassembly_base,
+        data_started: false,
     };
     Hudhook::builder()
         .with::<ImguiDx11Hooks>(render_loop)

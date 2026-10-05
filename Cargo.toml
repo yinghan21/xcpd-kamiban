@@ -13,6 +13,17 @@ hudhook = "0.9.0"
 
 anyhow = "1.0"
 
+# ===== 卡密验证 =====
+# Ed25519 签名验证。用非对称签名而不是 HMAC 的原因见 license.rs 顶部注释：
+# 对称密钥必须同时存在于"生成工具"和"DLL"里，DLL 一扩散密钥就泄露了。
+ed25519-dalek = "2"
+# SHA-256：把机器指纹哈希成短标识（卡密里只放 4 字节，控制卡密长度）
+sha2 = "0.10"
+# Base32：卡密文本编解码。A-Z2-7 天然不含 0/1/8/9，不会出现"O 和 0 分不清"
+data-encoding = "2"
+# 仅 keygen 用：生成密钥对需要操作系统的熵源
+getrandom = "0.2"
+
 windows-sys = { version = "0.61.0", features = [
     "Win32_System_SystemServices",
     "Win32_UI_WindowsAndMessaging",
@@ -23,6 +34,8 @@ windows-sys = { version = "0.61.0", features = [
     "Win32_System_LibraryLoader",
     "Win32_System_Threading",
     "Win32_System_Diagnostics_Debug",
+    # 机器码用：GetVolumeInformationW 读卷序列号
+    "Win32_Storage_FileSystem",
 
 ]}
 
