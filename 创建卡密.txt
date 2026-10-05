@@ -1,0 +1,5 @@
+# 客户在激活窗口里把机器码发给你，然后：
+cargo run --release --bin keygen -- issue --days 30 --machine A1B2C3D4
+
+# 客户说"用不了"时，先自己验一遍，分清是卡的问题还是他环境的问题：
+cargo run --release --bin keygen -- verify "卡密"
