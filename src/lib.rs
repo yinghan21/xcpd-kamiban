@@ -518,7 +518,7 @@ fn run(hmodule: *mut c_void) ->anyhow::Result<()> {
         }
     };
 
-    log::reset("xcpd ESP 启动 【v126·人机自瞄放行+人机诊断】");
+    log::reset("xcpd ESP 启动 【v127·卡密授权+剪贴板+注销】");
 
     let unity_base = memory::UnityPlayer_module_base().ok_or_else(|| {
         log::stage("失败: GetModuleHandleA UnityPlayer.dll");
