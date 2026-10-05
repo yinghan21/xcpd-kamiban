@@ -25,6 +25,18 @@ use hudhook::{MessageFilter, RenderContext};
 use hudhook::ImguiRenderLoop;
 use hudhook::Hudhook;
 use windows_sys::Win32::System::SystemServices::{DLL_PROCESS_ATTACH};
+use windows_sys::Win32::System::DataExchange::{
+    CloseClipboard, EmptyClipboard, GetClipboardData, OpenClipboard, SetClipboardData,
+};
+use windows_sys::Win32::System::Memory::{GlobalAlloc, GlobalLock, GlobalUnlock, GMEM_MOVEABLE};
+
+/// 剪贴板格式：Unicode 文本。
+///
+/// ★ 这里自己定义而不是从 windows-sys import：该 crate 的
+///   `Win32::System::DataExchange` 模块导出了 OpenClipboard 等**函数**，
+///   却没有导出这个**常量**。它的值是 Windows SDK 里的固定定义
+///   （`CF_UNICODETEXT = 13`），任何 Windows 版本都一样，自己写是安全的。
+const CF_UNICODETEXT: u32 = 13;
 use windows_sys::Win32::UI::Input::KeyboardAndMouse::{GetAsyncKeyState, VK_INSERT};
 use windows_sys::Win32::UI::WindowsAndMessaging::{ClipCursor};
 
@@ -155,8 +167,8 @@ fn draw_license_window(ui: &Ui, st: &mut EspLoop) {
     // ★ 用 Condition::Always 而不是 FirstUseEver：这个窗口必须一直可见。
     //   用 FirstUseEver 的话它会"记住位置"，客户拖到屏幕外就找不回来了。
     ui.window("授权验证  ·  xcpd")
-        .size([560.0, 300.0], Condition::Always)
-        .position([sw * 0.5 - 280.0, sh * 0.5 - 150.0], Condition::Always)
+        .size([620.0, 340.0], Condition::Always)
+        .position([sw * 0.5 - 310.0, sh * 0.5 - 170.0], Condition::Always)
         .build(|| {
             ui.text("本程序需要卡密授权");
             ui.separator();
@@ -172,7 +184,8 @@ fn draw_license_window(ui: &Ui, st: &mut EspLoop) {
             // ---- 卡密输入 ----
             ui.text("卡密：");
             ui.input_text("##lic", &mut st.lic_input).build();
-            ui.text("（粘贴后点下面的按钮。格式形如 XXXXXXXX-XXXXXXXX-...）");
+            ui.text("粘贴：Ctrl+V；输入框里 Ctrl+A 全选 / Ctrl+C 复制也可用");
+            ui.text("（格式形如 XXXXXXXX-XXXXXXXX-...）");
 
             if ui.button("  验证并保存  ") {
                 match license::verify(&st.lic_input) {
@@ -182,6 +195,22 @@ fn draw_license_window(ui: &Ui, st: &mut EspLoop) {
                         st.lic_msg = String::new();
                     }
                     Err(e) => st.lic_msg = e,
+                }
+            }
+
+            // ★ 保底通道：Windows 剪贴板是独占资源，万一被输入法/剪贴板工具占着，
+            //   粘贴会失败。这时让客户把卡密存成文本文件，一键读取 —— 不用重启游戏。
+            ui.same_line();
+            if ui.button("  从文件读取  ") {
+                match license::load() {
+                    license::License::Valid { expires } => {
+                        st.license = license::License::Valid { expires };
+                        st.lic_msg = String::new();
+                    }
+                    license::License::Invalid(e) => st.lic_msg = e,
+                    license::License::Missing => {
+                        st.lic_msg = "读不到 C:\\csgo_hook.lic（文件不存在或内容为空）".to_string()
+                    }
                 }
             }
 
@@ -200,6 +229,11 @@ fn draw_license_window(ui: &Ui, st: &mut EspLoop) {
 
 impl ImguiRenderLoop for EspLoop {
     fn initialize<'a>(&'a mut self, ctx: &mut Context, _rc: &'a mut dyn RenderContext) {
+        // ★ 给 ImGui 接上真正的 Windows 剪贴板。
+        //   少了这一行，输入框里的 Ctrl+V / Ctrl+C / Ctrl+A 全都无效 ——
+        //   因为 imgui-rs 默认挂的是空实现（见 WinClipboard 的注释）。
+        ctx.set_clipboard_backend(WinClipboard);
+
         // 必须在这里加字体：hudhook 紧接着才 build 字体图集，之后再加就晚了。
         load_chinese_font(ctx);
     }
@@ -312,10 +346,99 @@ impl ImguiRenderLoop for EspLoop {
     }
 }
 
+/// 给 ImGui 接上**真正的** Windows 剪贴板。
+///
+/// # 为什么必须自己写这个
+/// imgui-rs 默认挂的剪贴板后端是 `DummyClipboardContext` —— 源码里明写着
+/// "Non-functioning placeholder"：`get()` 恒返回 None，`set()` 什么都不做。
+/// 而 hudhook 也从未替我们注册过。**两边都没做**，结果就是
+/// ImGui 的输入框里 Ctrl+V 毫无反应 —— 客户根本没法把卡密粘贴进去。
+///
+/// # 为什么不引第三方库
+/// `arboard` 之类会拖进一堆依赖、内部还会起线程。这里只需要读写
+/// `CF_UNICODETEXT` 一种格式，直接调 Win32 更干净也更快。
+struct WinClipboard;
+
+/// 打开剪贴板，失败就短暂重试。
+///
+/// ★ 为什么要重试：Windows 剪贴板是**全局独占资源**，同一时刻只能有一个进程打开它。
+///   如果别的程序（浏览器、输入法、剪贴板历史工具）正占着，`OpenClipboard` 会直接失败。
+///   不重试的话，用户会偶发地遇到"点了粘贴没反应"，而且完全无从解释。
+fn open_clipboard_retry() -> bool {
+    for _ in 0..5 {
+        if unsafe { OpenClipboard(std::ptr::null_mut()) } != 0 {
+            return true;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(10));
+    }
+    false
+}
+
+impl imgui::ClipboardBackend for WinClipboard {
+    /// 读剪贴板（用户在输入框按 Ctrl+V 时 ImGui 会调它）
+    fn get(&mut self) -> Option<String> {
+        unsafe {
+            if !open_clipboard_retry() {
+                return None;
+            }
+            // ★ 用闭包包住读取逻辑，保证无论从哪条路径 return 都会执行 CloseClipboard。
+            //   剪贴板不关的后果很严重：**整个系统的复制粘贴都会卡死**。
+            let out = (|| {
+                let h = GetClipboardData(CF_UNICODETEXT);
+                if h.is_null() {
+                    return None; // 剪贴板里不是文本（比如是图片）
+                }
+                let p = GlobalLock(h) as *const u16;
+                if p.is_null() {
+                    return None;
+                }
+                // 剪贴板文本是 UTF-16 且以 NUL 结尾，先量长度再切切片
+                let mut len = 0usize;
+                while *p.add(len) != 0 {
+                    len += 1;
+                }
+                let s = String::from_utf16_lossy(std::slice::from_raw_parts(p, len));
+                GlobalUnlock(h);
+                Some(s)
+            })();
+            CloseClipboard();
+            out
+        }
+    }
+
+    /// 写剪贴板（ImGui 里选中文本按 Ctrl+C 时用）
+    fn set(&mut self, value: &str) {
+        unsafe {
+            if !open_clipboard_retry() {
+                return;
+            }
+            EmptyClipboard();
+
+            // UTF-16 + 结尾 NUL
+            let wide: Vec<u16> = value.encode_utf16().chain(std::iter::once(0)).collect();
+            let bytes = wide.len() * std::mem::size_of::<u16>();
+
+            // ★ 必须用 GMEM_MOVEABLE：SetClipboardData 要求可移动的全局内存块，
+            //   传 GMEM_FIXED 分配的内存会被系统直接拒绝。
+            let h = GlobalAlloc(GMEM_MOVEABLE, bytes);
+            if !h.is_null() {
+                let p = GlobalLock(h) as *mut u16;
+                if !p.is_null() {
+                    std::ptr::copy_nonoverlapping(wide.as_ptr(), p, wide.len());
+                    GlobalUnlock(h);
+                    // ★ SetClipboardData 成功后，这块内存的**所有权就移交给系统了**：
+                    //   不能再碰它、更不能 GlobalFree —— 多释放一次会直接把剪贴板搞坏。
+                    SetClipboardData(CF_UNICODETEXT, h);
+                }
+            }
+            CloseClipboard();
+        }
+    }
+}
+
 /// ImGui 默认字体 (ProggyClean) 不含中文字形，中文会显示成乱码。
 /// 这里从系统字体目录挑一个中文字体加进字体图集。
-fn load_chinese_font(ctx: &mut Context) {
-    const FONT_SIZE: f32 = 18.0;
+fn load_chinese_font(ctx: &mut Context) {    const FONT_SIZE: f32 = 18.0;
 
     const CANDIDATES: &[&str] = &[
         "C:\\Windows\\Fonts\\msyh.ttc",   // 微软雅黑
