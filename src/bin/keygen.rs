@@ -68,12 +68,24 @@ fn machine_code() -> [u8; 4] {
     [d[0], d[1], d[2], d[3]]
 }
 
+/// 把"显示形式的机器码"（8 位十六进制）解析回 4 字节。
+///
+/// ★★ 这里**必须按字节对逐个解析**，绝不能写成
+///    `u32::from_str_radix(s, 16)?.to_le_bytes()` ——
+///    那样会把字节序整个反过来：输入 `A1B2C3D4` 得到 `[D4,C3,B2,A1]`，
+///    而 DLL 侧显示的 `A1B2C3D4` 指的是 `[A1,B2,C3,D4]`。
+///    两边算出的机器码不一致 → 签出来的卡永远报"与本机不匹配"，
+///    而且这个症状完全看不出是转换环节出的问题（曾真实踩过）。
 fn parse_machine_id(s: &str) -> Option<[u8; 4]> {
     let t: String = s.chars().filter(|c| c.is_ascii_hexdigit()).collect();
     if t.len() != 8 {
         return None;
     }
-    Some(u32::from_str_radix(&t, 16).ok()?.to_le_bytes())
+    let mut out = [0u8; 4];
+    for (i, byte) in out.iter_mut().enumerate() {
+        *byte = u8::from_str_radix(&t[i * 2..i * 2 + 2], 16).ok()?;
+    }
+    Some(out)
 }
 
 fn mc_display(mc: &[u8; 4]) -> String {
@@ -125,19 +137,27 @@ fn usage() {
 卡密生成器 —— 只有你自己用，别分发
 
 用法:
-  keygen init                              生成密钥对（只做一次）
-  keygen issue --days <天数> [--machine XX]  签发卡密
-  keygen verify <卡密>                     校验一张卡密（查签名 / 绑定机器码 / 到期）
-  keygen show                              显示公钥
+  keygen init                                  生成密钥对（只做一次）
+  keygen issue --days 30                       签发卡密（绑定本机）
+  keygen issue --days 30 --machine A1B2C3D4    签发卡密（绑定指定机器）
+  keygen verify 卡密                           校验一张卡密
+  keygen show                                  显示公钥
 
 说明:
   --days     有效期天数，例如 30
-  --machine  客户机器码（8 位 hex）。不填则绑定**本机**机器码
-             客户在 DLL 的卡密窗口里能看到自己的机器码
+  --machine  客户机器码（8 位十六进制）。不填则绑定**本机**机器码。
+             客户在 DLL 的卡密窗口里能看到自己的机器码。
 
 示例:
-  keygen issue --days 7                      给本机发 7 天卡
-  keygen issue --days 30 --machine A1B2C3D4  给指定机器发 30 天卡
+  keygen issue --days 7
+  keygen issue --days 30 --machine 877D9464
+  keygen verify "CZVMK2WU-YOZKC45E-V627NQYV-..."
+
+★ PowerShell 用户注意：命令里不要写尖括号。
+  网上很多文档用 <卡密> 表示"这里填卡密"，但 PowerShell 把 < 当重定向符号，
+  照抄会直接报：The '<' operator is reserved for future use
+  正确做法是**直接粘卡密**，或用引号包起来（推荐）：
+    keygen verify "CZVMK2WU-..."
 "#
     );
 }
@@ -373,5 +393,48 @@ fn main() {
         Some("verify") => cmd_verify(&args[1..]),
         Some("show") => cmd_show(),
         _ => usage(),
+    }
+}
+
+// ==================== 测试 ====================
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 机器码的"显示 ↔ 解析"必须严格对应。
+    ///
+    /// ★ 这个测试是为一个**真实踩过的 bug** 补的：
+    ///   早期 `parse_machine_id` 写成 `u32::from_str_radix(s,16)?.to_le_bytes()`，
+    ///   把字节序整个反了 —— 输入 `A1B2C3D4` 得到 `[D4,C3,B2,A1]`。
+    ///   后果：用 `--machine` 签出来的卡**永远验不过**，而且报错信息是
+    ///   "卡密与本机不匹配"，完全看不出问题出在机器码转换上。
+    #[test]
+    fn machine_id_roundtrip() {
+        // ① 本机机器码往返必须一致
+        let mc = machine_code();
+        let shown = mc_display(&mc);
+        let parsed = parse_machine_id(&shown).expect("应当能解析回机器码");
+        assert_eq!(parsed, mc, "显示/解析往返不一致 → 字节序反了");
+
+        // ② 用固定字面量分别钉死两端的正确行为。
+        //    ★ 这一步不能省：假如 mc_display 和 parse_machine_id
+        //      **同时以相反的方式出错**，① 的往返测试会恰好通过，bug 被掩盖。
+        //      只有拿已知值各自校准，才能保证它们真的对。
+        assert_eq!(
+            parse_machine_id("A1B2C3D4").unwrap(),
+            [0xA1, 0xB2, 0xC3, 0xD4],
+            "解析端字节序错误"
+        );
+        assert_eq!(
+            mc_display(&[0xA1, 0xB2, 0xC3, 0xD4]),
+            "A1B2C3D4",
+            "显示端字节序错误"
+        );
+
+        // ③ 非法输入要能识别出来
+        assert!(parse_machine_id("XYZ").is_none());
+        assert!(parse_machine_id("A1B2C3").is_none(), "少一位应当拒绝");
+        assert!(parse_machine_id("").is_none());
     }
 }
