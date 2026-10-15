@@ -1,4 +1,4 @@
-# xcpd
+# 香肠派对
 
 Unity IL2CPP 游戏的 **ESP 透视 + 鼠标自瞄**，Rust 写成，编译成单个 DLL 注入游戏进程。
 
